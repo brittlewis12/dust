@@ -121,7 +121,7 @@ export default function ModelPicker({
             />
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent>
+          <DropdownMenuContent align="start">
             {modelProviders.map((p) => (
               <DropdownMenuSub
                 key={p.providerId}
@@ -133,7 +133,7 @@ export default function ModelPicker({
               >
                 <DropdownMenuSubTrigger label={p.providerId} />
                 <DropdownMenuPortal>
-                  <DropdownMenuSubContent>
+                  <DropdownMenuSubContent className="max-h-[95dvh] overflow-y-auto">
                     {loadingProvider === p.providerId ? (
                       <DropdownMenuItem
                         label="Loading models..."
