@@ -1,0 +1,3 @@
+node 20.13.0
+rust 1.86.0 # 2021 edition
+cmake 3 # required to build sentencepiece-sys. incompatible with cmake@4 due to pinned old sentencepiece dep in cargo crate.
