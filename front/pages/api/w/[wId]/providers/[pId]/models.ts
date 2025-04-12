@@ -108,6 +108,29 @@ async function handler(
                   m.id.startsWith("o1-") ||
                   m.id.startsWith("o3-") ||
                   m.id.startsWith("o4-")
+ //                 !(
+ //                   m.id.includes("similarity") ||
+ //                   m.id.includes("edit") ||
+ //                   m.id.includes("insert") ||
+ //                   m.id.includes("audio") ||
+ //                   m.id.includes("tts") ||
+ //                   m.id.includes("realtime") ||
+ //                   m.id.includes(":") ||
+ //                   m.id.includes("embedding")
+ //                 ) &&
+ //                 (m.id.startsWith("text-") ||
+ //                   m.id.startsWith("code-") ||
+ //                   m.id.startsWith("o1-") ||
+ //                   m.id.startsWith("gpt-3.5-turbo") ||
+ //                   m.id.startsWith("gpt-4") ||
+ //                   m.id.startsWith("o3") ||
+ //                   m.id.startsWith("chatgpt-4o-")) &&
+ //                 (!chat ||
+ //                   m.id.startsWith("o1-") ||
+ //                   m.id.startsWith("gpt-3.5-turbo") ||
+ //                   m.id.startsWith("gpt-4") ||
+ //                   m.id.startsWith("o3") ||
+ //                   m.id.startsWith("chatgpt-4o-"))
                 );
               });
             }
@@ -169,6 +192,29 @@ async function handler(
                   m.id.startsWith("o1-") ||
                   m.id.startsWith("o3-") ||
                   m.id.startsWith("o4-")
+ //                 !(
+ //                   m.model.includes("similarity") ||
+ //                   m.model.includes("edit") ||
+ //                   m.model.includes("insert") ||
+ //                   m.model.includes("audio") ||
+ //                   m.id.includes("tts") ||
+ //                   m.id.includes("realtime") ||
+ //                   m.model.includes(":") ||
+ //                   m.model.includes("embedding")
+ //                 ) &&
+ //                 (m.model.startsWith("text-") ||
+ //                   m.model.startsWith("code-") ||
+ //                   m.model.startsWith("o1-") ||
+ //                   m.model.startsWith("gpt-3.5-turbo") ||
+ //                   m.model.startsWith("gpt-4") ||
+ //                   m.model.startsWith("o3")) &&
+ //                 (!chat ||
+ //                   m.model.startsWith("o1-") ||
+ //                   m.model.startsWith("o3") ||
+ //                   m.model.startsWith("gpt-3.5-turbo") ||
+ //                   m.model.startsWith("gpt-4") ||
+ //                   m.id.startsWith("o3") ||
+ //                   m.id.startsWith("chatgpt-4o-"))
                 );
               });
             }
