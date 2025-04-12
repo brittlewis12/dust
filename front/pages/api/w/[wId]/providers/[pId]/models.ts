@@ -9,6 +9,8 @@ import {
   FIREWORKS_DEEPSEEK_R1_MODEL_ID,
   GEMINI_1_5_FLASH_LATEST_MODEL_ID,
   GEMINI_1_5_PRO_LATEST_MODEL_ID,
+  GEMINI_2_5_PRO_EXPERIMENTAL_MODEL_ID,
+  GEMINI_2_5_PRO_PREVIEW_MODEL_ID,
   GEMINI_2_FLASH_LITE_PREVIEW_MODEL_ID,
   GEMINI_2_FLASH_MODEL_ID,
   GEMINI_2_FLASH_THINKING_PREVIEW_MODEL_ID,
@@ -89,11 +91,12 @@ async function handler(
               f = mList.filter((m) => {
                 return (
                   !(
-                    m.id.includes("search") ||
                     m.id.includes("similarity") ||
                     m.id.includes("edit") ||
                     m.id.includes("insert") ||
                     m.id.includes("audio") ||
+                    m.id.includes("tts") ||
+                    m.id.includes("realtime") ||
                     m.id.includes(":") ||
                     m.id.includes("embedding")
                   ) &&
@@ -102,11 +105,14 @@ async function handler(
                     m.id.startsWith("o1-") ||
                     m.id.startsWith("gpt-3.5-turbo") ||
                     m.id.startsWith("gpt-4") ||
-                    m.id.startsWith("o3")) &&
+                    m.id.startsWith("o3") ||
+                    m.id.startsWith("chatgpt-4o-")) &&
                   (!chat ||
                     m.id.startsWith("o1-") ||
                     m.id.startsWith("gpt-3.5-turbo") ||
-                    m.id.startsWith("gpt-4"))
+                    m.id.startsWith("gpt-4") ||
+                    m.id.startsWith("o3") ||
+                    m.id.startsWith("chatgpt-4o-"))
                 );
               });
             }
@@ -150,11 +156,12 @@ async function handler(
               f = mList.filter((m) => {
                 return (
                   !(
-                    m.model.includes("search") ||
                     m.model.includes("similarity") ||
                     m.model.includes("edit") ||
                     m.model.includes("insert") ||
                     m.model.includes("audio") ||
+                    m.id.includes("tts") ||
+                    m.id.includes("realtime") ||
                     m.model.includes(":") ||
                     m.model.includes("embedding")
                   ) &&
@@ -168,7 +175,9 @@ async function handler(
                     m.model.startsWith("o1-") ||
                     m.model.startsWith("o3") ||
                     m.model.startsWith("gpt-3.5-turbo") ||
-                    m.model.startsWith("gpt-4"))
+                    m.model.startsWith("gpt-4") ||
+                    m.id.startsWith("o3") ||
+                    m.id.startsWith("chatgpt-4o-"))
                 );
               });
             }
@@ -264,6 +273,8 @@ async function handler(
               { id: GEMINI_2_FLASH_MODEL_ID },
               { id: GEMINI_2_FLASH_LITE_PREVIEW_MODEL_ID },
               { id: GEMINI_2_PRO_PREVIEW_MODEL_ID },
+              { id: GEMINI_2_5_PRO_PREVIEW_MODEL_ID },
+              { id: GEMINI_2_5_PRO_EXPERIMENTAL_MODEL_ID },
             ],
           });
 

@@ -127,6 +127,7 @@ export const GEMINI_1_5_FLASH_LATEST_MODEL_ID =
   "gemini-1.5-flash-latest" as const;
 export const GEMINI_2_FLASH_MODEL_ID = "gemini-2.0-flash" as const;
 export const GEMINI_2_FLASH_LITE_MODEL_ID = "gemini-2.0-flash-lite" as const;
+export const GEMINI_2_5_PRO_EXPERIMENTAL_MODEL_ID = "gemini-2.5-pro-exp-03-25";
 export const GEMINI_2_5_PRO_PREVIEW_MODEL_ID = "gemini-2.5-pro-preview-03-25";
 
 // These Gemini preview models are deprecated (either replaced by a GA model or not making it to GA)
