@@ -1,59 +1,73 @@
 LOCAL.md
 ===
 
-## prereqs
+## Prereqs
 
-- node 20.13.0
-- rust 2021 edition
-- cmake 3 (required to build sentencepiece-sys. incompatible with cmake@4 due to pinned old sentencepiece dep in cargo crate.)
+- Node.js 20.13.0
+- Rust (2021 edition toolchain)
+- CMake 3 (required to build sentencepiece-sys; cmake@4 is incompatible with the pinned crate)
 
-## setup
+## Setup (updated for WorkOS auth + optional Temporal)
 
-1. set up `.env.local`:
+1) Create `.env.local` from the example and review values
     ```sh
-    ES_LOCAL_VERSION=8.17.4
-    ES_LOCAL_HEAP_INIT=4g
-    ES_LOCAL_HEAP_MAX=14g # “it is not recommended to assign more than half of the RAM to elasticsearch.” https://discuss.elastic.co/t/invalid-initial-heap-size/143248/2
-    ES_LOCAL_PORT=9200
-    ELASTICSEARCH_URL=http://localhost:9200
-    ELASTICSEARCH_USERNAME=elastic
-    ELASTICSEARCH_PASSWORD=elastic
-    KIBANA_LOCAL_PASSWORD=kibana
-    RUN_MODE=dev # for qdrant
-    QDRANT_CLUSTER_0_URL=http://localhost:6334 # needs grpc endpoint, not rest/http
-    QDRANT_CLUSTER_0_API_KEY=qdrant
-    QDRANT__SERVICE__API_KEY=qdrant
-    NODE_ENV=development
-    DUST_REGION=local
-    FRONT_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_front
-    CONNECTORS_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_connectors
-    DATABASES_STORE_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_databases_store
-    CORE_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_api
-    OAUTH_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_oauth
-    ```
-1. run docker compose: `docker compose --env-file .env.local up` (optionally, as a daemon with `-d`)
-1. with required services up, initialize the dev container’s core databases, qdrant collections, and elasticsearch indexes:
-    ```sh
-    ./init_dev_container.sh
+    cp .env.local.example .env.local
     ```
 
-    you may optionally provide the minimally required environment variables manually:
+   Notes:
+   - This repo now uses WorkOS for auth locally. Ensure you set `WORKOS_*` vars as indicated in `.env.local.example` and register `http://localhost:3000/api/workos/callback` in the WorkOS dashboard.
+   - Kibana requires `KIBANA_ENCRYPTION_KEY` (random 32+ chars) in env for the docker-compose service.
+   - GCS emulation is optional for MVP. Core’s databases store can point to Postgres only; data source document storage can be added later.
+
+2) Start infra services
+
+    Run docker compose (Elasticsearch, Kibana, Postgres, Redis, Qdrant):
+
     ```sh
-    RUN_MODE=dev QDRANT_CLUSTER_0_URL=http://localhost:6334 QDRANT_CLUSTER_0_API_KEY=qdrant QDRANT__SERVICE__API_KEY=qdrant ELASTICSEARCH_URL=http://localhost:9200 ELASTICSEARCH_USERNAME=elastic ELASTICSEARCH_PASSWORD=elastic DUST_REGION=local FRONT_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_front DATABASES_STORE_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_databases_store ./init_dev_container.sh
+    docker compose --env-file .env.local up
+    # add -d to run detached
     ```
-1. build the client js sdk
+
+3) Initialize Core DBs, Qdrant collections, and Elasticsearch indices
+
+    With required services up, the init script needs environment variables from `.env.local`:
+
+    **Using mise (recommended for mise users):**
+    ```sh
+    MISE_ENV_FILE='.env.local' mise x -- ./init_dev_container.sh
+    ```
+
+    **Using standard shell (export vars):**
+    ```sh
+    export $(grep -v '^#' .env.local | xargs) && ./init_dev_container.sh
+    ```
+
+    **Or source the file:**
+    ```sh
+    set -a && source .env.local && set +a && ./init_dev_container.sh
+    ```
+
+    After `init_dev_container.sh`, run these database setup commands (also need env vars):
+    ```sh
+    # Using mise:
+    cd front && MISE_ENV_FILE='../.env.local' mise x -- ./admin/init_db.sh --unsafe
+    cd front && MISE_ENV_FILE='../.env.local' mise x -- ./admin/init_plans.sh --unsafe
+    cd connectors && MISE_ENV_FILE='../.env.local' mise x -- ./admin/init_db.sh --unsafe
+    cd core && MISE_ENV_FILE='../.env.local' mise x -- cargo run --bin init_db
+    ```
+4) Build the client JS SDK
     ```sh
     cd sdks/js
     npm i --frozen-lockfile
     npm run build
     cd -
     ```
-1. install npm packages for the connectors node express project
+5) Install npm packages for connectors (optional for MVP)
     ```sh
     cd connectors
     npm i --frozen-lockfile
     ```
-1. run local database migrations for connectors
+6) Run local database migrations for connectors (optional for MVP)
     ```sh
     DUST_REGION=local CONNECTORS_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_connectors npm run initdb -- --unsafe
     > connectors@0.1.0 initdb
@@ -62,27 +76,27 @@ LOCAL.md
     Running initdb
     {"level":"info","time":1744310165996,"pid":86039,"hostname":"[YOUR_HOST].local","msg":"Done"}
     ```
-1. run core rust API database migrations
+7) Run Core Rust API database migrations
     ```sh
     cd core
     DUST_REGION=local CORE_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_api OAUTH_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_oauth DATABASES_STORE_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_databases_store cargo run --bin init_db
     ```
-1. install npm packages for the front-end next.js project
+8) Install npm packages for the Front (Next.js) project
     ```sh
     cd front
     npm i --frozen-lockfile
     ```
-1. run local database migrations for front-end
+9) Run local database migrations for Front
     ```sh
     DUST_REGION=local FRONT_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_front npm run initdb
     ```
-1. initialize free_test and free_upgraded plans
+10) Initialize free_test and free_upgraded plans
     ```sh
     DUST_REGION=local FRONT_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_front npx tsx ./admin/init_plans.ts
     Free plan FREE_TEST_PLAN created.
     Free plan FREE_UPGRADED_PLAN created.
     ```
-1. initialize your first workspace with your desired name to generate workspace & space ids & follow the instructions
+11) Initialize your first workspace to generate workspace & space IDs
     ```sh
     DUST_REGION=local FRONT_DATABASE_URI=postgres://dev:dev@localhost:5432/dust_front npx tsx ./admin/init_dust_apps.ts --name [YOUR_WORKSPACE_NAME]
     Creating group
@@ -94,38 +108,38 @@ LOCAL.md
     - Navigate to: http://localhost:3000/poke/[YOUR_WORKSPACE_ID]/spaces/[YOUR_SPACE_ID]
     - Run the "Sync dust-apps" plugin
     ```
-  - with the newly generated IDs exported, start the next app: `npm run dev`
-  - navigate to the poke page with the ids generated by the `init_dust_apps.ts` command
+    - With `DUST_APPS_WORKSPACE_ID` and `DUST_APPS_SPACE_ID` exported, start Front:
+      ```sh
+      # Using mise:
+      cd front && MISE_ENV_FILE='../.env.local' mise x -- npm run dev
+      # Or standard shell:
+      cd front && npm run dev  # (after exporting env vars)
+      ```
+    - Navigate to `/poke/[WORKSPACE_ID]/spaces/[SPACE_ID]` and run "Sync dust-apps".
 
-  CURRENT BLOCKER:
-  - when visiting [poke page](http://localhost:3000/poke/RlldWdDTUU/spaces/vlt_q03Y149aTx):
-    * `TypeError: "secret" is required` in `lib/auth.ts:908`: `const session = await getAuth0Session(req, res);`
-  ```
-  ✓ Compiled /poke/[wId]/spaces/[spaceId] in 9.6s (4074 modules)
-  ⨯ TypeError: "secret" is required
-     at get (/Users/britt/code/dust/front/node_modules/@auth0/nextjs-auth0/dist/auth0-session/get-config.js:197:15)
-     at getConfig (/Users/britt/code/dust/front/node_modules/@auth0/nextjs-auth0/dist/config.js:74:45)
-     at SessionCache.getConfig (/Users/britt/code/dust/front/node_modules/@auth0/nextjs-auth0/dist/config.js:97:44)
-     at SessionCache.init (/Users/britt/code/dust/front/node_modules/@auth0/nextjs-auth0/dist/session/cache.js:36:39)
-     at SessionCache.get (/Users/britt/code/dust/front/node_modules/@auth0/nextjs-auth0/dist/session/cache.js:89:20)
-     at get (/Users/britt/code/dust/front/node_modules/@auth0/nextjs-auth0/dist/session/cache.js:101:36)
-     at Object.getSession (/Users/britt/code/dust/front/node_modules/@auth0/nextjs-auth0/dist/session/get-session.js:9:51)
-     at getSession (/Users/britt/code/dust/front/node_modules/@auth0/nextjs-auth0/dist/index.js:31:47)
-     at getSession (webpack-internal:///./lib/auth.ts:689:90)
-     at eval (webpack-internal:///./lib/iam/session.ts:76:126)
-     at /Users/britt/code/dust/front/node_modules/next/dist/compiled/next-server/pages.runtime.dev.js:25:254
-     at /Users/britt/code/dust/front/node_modules/next/dist/server/lib/trace/tracer.js:140:36
-     at NoopContextManager.with (/Users/britt/code/dust/front/node_modules/@opentelemetry/api/build/src/context/NoopContextManager.js:25:19)
-     at ContextAPI.with (/Users/britt/code/dust/front/node_modules/@opentelemetry/api/build/src/api/context.js:60:46)
-     at NoopTracer.startActiveSpan (/Users/britt/code/dust/front/node_modules/@opentelemetry/api/build/src/trace/NoopTracer.js:65:31) {
-       page: '/poke/RlldWdDTUU/spaces/vlt_q03Y149aTx'
-     }
-  ○ Compiling /_error ...
-  ✓ Compiled /_error in 6.4s (4076 modules)
-  GET /poke/RlldWdDTUU/spaces/vlt_q03Y149aTx 500 in 17380ms
-  ```
+12) Login locally (WorkOS)
 
-## 2025-06-13 new errors!!!
+    - Ensure these envs are set: `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, `WORKOS_COOKIE_PASSWORD`, `WORKOS_ISSUER_URL`, `REGION_RESOLVER_SECRET`.
+    - In WorkOS dashboard, add redirect URI: `http://localhost:3000/api/workos/callback`.
+    - Visit `http://localhost:3000/api/workos/login` to sign in (or `?screenHint=sign-up`).
 
-DUST_DEVELOPMENT_SYSTEM_API_KEY
-DUST_DEVELOPMENT_WORKSPACE_ID
+    To upgrade your workspace to the free unlimited plan:
+    ```sh
+    cd front && MISE_ENV_FILE='../.env.local' mise x -- npx tsx ./admin/cli.ts workspace upgrade --wId YOUR_WORKSPACE_ID
+    ```
+
+    Note: The workspace ID is shown in the URL after login (e.g., `7aVwrq0Dro`).
+
+13) Optional: Temporal dev for long-running assistants
+
+    Assistants run sync-first, with a 20s timeout fallback to Temporal. To avoid failovers for demos:
+
+    ```sh
+    temporal server start-dev
+    export TEMPORAL_NAMESPACE=default
+    export TEMPORAL_AGENT_NAMESPACE=default
+    export TEMPORAL_CONNECTORS_NAMESPACE=default
+    cd front && node start_worker.ts -w agent_loop update_workspace_usage
+    ```
+
+    You can also add npm scripts to automate this (see front/package.json after patch).

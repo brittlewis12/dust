@@ -441,11 +441,18 @@ export async function postUserMessage(
   }
 
   // Check plan and rate limit.
+  console.log("DEBUG: Checking message limits for workspace", owner.sId);
+  console.log("DEBUG: Plan details:", {
+    code: plan.code,
+    maxMessages: plan.limits.assistant.maxMessages,
+    maxMessagesTimeframe: plan.limits.assistant.maxMessagesTimeframe,
+  });
   const messageLimit = await isMessagesLimitReached({
     owner,
     plan,
     mentions,
   });
+  console.log("DEBUG: Message limit result:", messageLimit);
   if (messageLimit.isLimitReached && messageLimit.limitType) {
     return new Err({
       status_code: 403,
@@ -1572,8 +1579,18 @@ async function isMessagesLimitReached({
   plan: PlanType;
   mentions: MentionType[];
 }): Promise<MessageLimit> {
+  console.log(
+    "DEBUG isMessagesLimitReached: Starting check for workspace",
+    owner.sId
+  );
+  console.log(
+    "DEBUG isMessagesLimitReached: Plan maxMessages:",
+    plan.limits.assistant.maxMessages
+  );
+
   // Checking rate limit
   const activeSeats = await countActiveSeatsInWorkspaceCached(owner.sId);
+  console.log("DEBUG isMessagesLimitReached: Active seats:", activeSeats);
 
   const userMessagesLimit = 10 * activeSeats;
   const remainingMessages = await rateLimiter({
@@ -1582,8 +1599,13 @@ async function isMessagesLimitReached({
     timeframeSeconds: 60,
     logger,
   });
+  console.log(
+    "DEBUG isMessagesLimitReached: Remaining messages from rate limiter:",
+    remainingMessages
+  );
 
   if (remainingMessages <= 0) {
+    console.log("DEBUG isMessagesLimitReached: Rate limit hit!");
     return {
       isLimitReached: true,
       limitType: "rate_limit_error",
@@ -1600,6 +1622,9 @@ async function isMessagesLimitReached({
   const { maxMessages, maxMessagesTimeframe } = plan.limits.assistant;
 
   if (plan.limits.assistant.maxMessages === -1) {
+    console.log(
+      "DEBUG isMessagesLimitReached: Unlimited plan detected, skipping plan limits"
+    );
     return {
       isLimitReached: false,
       limitType: null,

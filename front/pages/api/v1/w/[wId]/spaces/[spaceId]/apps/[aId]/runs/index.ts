@@ -236,6 +236,62 @@ async function handler(
       : "non-blocking";
 
   switch (req.method) {
+    case "GET":
+      // List runs for this app
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
+      const offset = req.query.offset
+        ? parseInt(req.query.offset as string)
+        : 0;
+
+      // Get all run types if not specified
+      const runType = req.query.runType
+        ? (req.query.runType as string)
+        : ["local", "deploy"];
+
+      const runs = await RunResource.listByAppAndRunType(
+        keyAuth.getNonNullableWorkspace(),
+        { appId: app.id, runType },
+        { limit, offset }
+      );
+
+      const totalRuns = await RunResource.countByAppAndRunType(
+        keyAuth.getNonNullableWorkspace(),
+        { appId: app.id, runType }
+      );
+
+      const dustRunIds = runs.map((r) => r.dustRunId);
+
+      const dustRuns = await coreAPI.getRunsBatch({
+        projectId: app.dustAPIProjectId,
+        dustRunIds: dustRunIds,
+      });
+
+      if (dustRuns.isErr()) {
+        return apiError(req, res, {
+          status_code: 500,
+          api_error: {
+            type: "internal_server_error",
+            message: "Failed to retrieve runs from Core API.",
+            run_error: dustRuns.error,
+          },
+        });
+      }
+
+      res.status(200).json({
+        runs: dustRunIds
+          .map((dustRunId) => {
+            const run = dustRuns.value.runs[dustRunId];
+            if (run) {
+              // Add specification_hash field (same as app_hash)
+              run.specification_hash = run.app_hash;
+            }
+            return run;
+          })
+          .filter((r) => r !== undefined),
+        total: totalRuns,
+      });
+      return;
+
     case "POST":
       if (
         !req.body ||
@@ -522,7 +578,8 @@ async function handler(
         status_code: 405,
         api_error: {
           type: "method_not_supported_error",
-          message: "The method passed is not supported, POST is expected.",
+          message:
+            "The method passed is not supported, GET or POST is expected.",
         },
       });
   }
