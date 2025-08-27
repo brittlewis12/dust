@@ -163,7 +163,7 @@ impl JSExecutor {
         std::thread::spawn(move || {
             // Init the Deno/v8 platform in the main JSExecutor thread.
             // see https://docs.rs/deno_core/latest/deno_core/struct.JsRuntime.html
-            JsRuntime::init_platform(None);
+            JsRuntime::init_platform(None, false);
 
             match executor.run() {
                 Ok(_) => {}

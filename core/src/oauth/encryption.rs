@@ -10,7 +10,16 @@ use lazy_static::lazy_static;
 
 lazy_static! {
     static ref ENCRYPTION_KEY: aead::LessSafeKey = {
-        let encoded_key = env::var("OAUTH_ENCRYPTION_KEY").unwrap();
+        let encoded_key = env::var("OAUTH_ENCRYPTION_KEY")
+            .unwrap_or_else(|_| {
+                if cfg!(test) {
+                    // Use a deterministic test key when OAUTH_ENCRYPTION_KEY is not set
+                    // This is a 32-byte key, base64 encoded - ONLY for testing!
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string()
+                } else {
+                    panic!("OAUTH_ENCRYPTION_KEY environment variable must be set in production");
+                }
+            });
         let key_bytes = general_purpose::STANDARD.decode(&encoded_key).unwrap();
         let unbound_key = aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key_bytes).unwrap();
         aead::LessSafeKey::new(unbound_key)

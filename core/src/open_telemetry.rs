@@ -86,10 +86,10 @@ pub fn build_otel_layer<S>() -> Result<(OpenTelemetryLayer<S, Tracer>, TracingGu
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    use init_tracing_opentelemetry::{init_propagator, otlp, resource::DetectResource};
+    use init_tracing_opentelemetry::{init_propagator, otlp::traces::init_tracerprovider, resource::DetectResource};
     use opentelemetry::global;
     let otel_rsrc = DetectResource::default().build();
-    let tracer_provider = otlp::init_tracerprovider(otel_rsrc, otlp::identity)?;
+    let tracer_provider = init_tracerprovider(otel_rsrc, std::convert::identity)?;
     init_propagator()?;
     let layer = tracing_opentelemetry::layer()
         .with_error_records_to_exceptions(true)
