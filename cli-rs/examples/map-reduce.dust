@@ -1,0 +1,54 @@
+
+code ARRAY_GEN {
+  code:
+```
+_fun = (env) => {
+  // Generate an array of numbers for map/reduce to process
+  return [
+    { n: 5 },
+    { n: 7 },
+    { n: 10 },
+    { n: 12 }
+  ];
+}
+```
+}
+
+map FIBS {
+  from: ARRAY_GEN
+}
+
+code FIB {
+  code:
+```
+_fun = (env) => {
+  const item = env.state.FIBS;
+  const n = item.n;
+  function fib(k) {
+    let a = 0, b = 1;
+    for (let i = 0; i < k; i++) {
+      const t = a; a = b; b = t + b;
+    }
+    return a;
+  }
+  return { n: n, fib: fib(n) };
+}
+```
+}
+
+reduce FIBS {}
+
+code SUM {
+  code:
+```
+_fun = (env) => {
+  const results = env.state.FIB;
+  const total = results.reduce((acc, r) => acc + r.fib, 0);
+  return {
+    count: results.length,
+    total_sum: total,
+    values: results
+  };
+}
+```
+}

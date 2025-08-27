@@ -1,0 +1,34 @@
+input INPUT {}
+
+code FIB {
+  code:
+```
+_fun = (env) => {
+  const rec = env.input.value;
+  const n = rec.n;
+  console.log("computing fib for", n);
+  if (typeof n !== 'number') { throw new Error("n must be a number"); }
+  if (n < 0) { throw new Error("n must be >= 0"); }
+  function fib(k) {
+    let a = 0, b = 1;
+    for (let i = 0; i < k; i++) {
+      const t = a; a = b; b = t + b;
+    }
+    return a;
+  }
+  return { n, fib: fib(n) };
+}
+```
+}
+
+code DOUBLE {
+  code:
+```
+_fun = (env) => {
+  const out = env.state.FIB;
+  console.log("doubling", out.fib);
+  return { n: out.n, fib: out.fib, doubled: out.fib * 2 };
+}
+```
+}
+

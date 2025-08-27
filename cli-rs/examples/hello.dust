@@ -1,0 +1,6 @@
+input INPUT {}
+
+llm GREET {
+  provider: "openai/gpt-4o",
+  prompt: "Say hello in one short sentence."
+}

@@ -1,0 +1,7 @@
+{
+  "model": { "provider": "openai", "model": "gpt-4o" },
+  "instructions": "You are a helpful assistant.",
+  "tools": {
+    "local_docs": { "enable": false }
+  }
+}
