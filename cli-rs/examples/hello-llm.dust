@@ -1,0 +1,6 @@
+input INPUT {}
+
+llm GREET {
+  prompt: "Say hello in one short sentence."
+}
+

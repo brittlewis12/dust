@@ -9,12 +9,7 @@ A fast, local‑first CLI to author, validate, and run Dust specs without the Sa
   - macOS 13+/arm64/x86_64 or Ubuntu 22.04+
 - Build:
   - `cd cli-rs`
-  - Optional embedded Postgres: `cargo build --features pg-embedded`
-  - Without embedded PG: `cargo build`
-
-Notes:
-- If you don’t enable `pg-embedded`, set `CORE_DATABASE_URI` to a local Postgres.
-- On some systems, you may need to select Rust 1.87 explicitly (e.g., `cargo +1.87.0 build`).
+  - `cargo build`
 
 ## Quickstart
 
@@ -28,6 +23,8 @@ Notes:
   - `dustx dataset create emails ./fixtures/messages.json`
 - Run a spec with dataset:
   - `dustx run path/to/app.dust --dataset-id emails --dataset-hash <hash>`
+- Run a simple LLM spec (provide your model at runtime):
+  - `dustx run examples/hello-llm.dust --model GREET=openai/gpt-5`
 - Assistant config (chat via messages file):
   - `dustx run --assistant-file assistant.json --messages-file messages.json`
 - Watch mode:
@@ -46,11 +43,32 @@ Notes:
 - Datasets: `create|list|hashes|show`.
 - Spec tools: `check|lint|fmt|diff|hash|tokens`.
 - Cache: `stats|clear|export|import`.
-- Doctor: environment + DB checks with helpful hints.
+- Doctor: grouped environment checks with clear verdict.
 
 ## What’s Not Supported in This Release
 
 - DataSource / Database / DatabaseSchema blocks. The CLI will fail fast if they are present. Use `docs` commands (local_docs) for early RAG instead.
+
+## Embedded DB Lifecycle
+
+- dustx manages an embedded Postgres automatically; its lifecycle matches the CLI’s lifetime. You do not need to start/stop it manually.
+- Available DB utilities: `dustx db backup` and `dustx db reset`.
+- If you have `CORE_DATABASE_URI` set, it is currently ignored (dustx uses the embedded DB by default).
+
+## Runtime Block Configuration
+
+Core expects some blocks (LLM/Chat, etc.) to receive runtime configuration (e.g., provider/model, temperature). The CLI lets you provide this without editing the spec:
+
+- `--model NAME=provider/model_id` sets `provider_id` and `model_id` for the given block name.
+- `--set NAME:key=value` sets arbitrary config keys; values are best-effort typed (bool/number/JSON, else string). Repeat flags as needed.
+
+Example:
+
+- `dustx run examples/hello-llm.dust --model GREET=openai/gpt-5 --set GREET:temperature=0.2 --set GREET:use_stream=false`
+
+Notes:
+- The Dust spec grammar does not include `model` keys in LLM/Chat blocks; model selection is provided as runtime config.
+- The UI may surface defaults, but core requires explicit config for these blocks when executing.
 
 ## Tips
 
@@ -63,4 +81,3 @@ Notes:
 
 - `doctor` exits nonzero for blocking issues (e.g., embedded DB failures or `.dust` not writable). It prints hints with suggested fixes.
 - If provider probes warn, it does not block most flows (unless your spec uses those providers).
-

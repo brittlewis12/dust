@@ -46,7 +46,7 @@ enum SpecCmd {
     Tokens {
         #[arg(value_name = "SPEC_PATH")]
         spec_path: String,
-        #[arg(long, value_name = "MODEL", default_value = "openai/gpt-4o")]
+        #[arg(long, value_name = "MODEL", default_value = "openai/gpt-5")]
         model: String,
     },
 }
@@ -90,7 +90,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    // /// Embedded Postgres lifecycle
+    /// Database utilities (embedded DB lifecycle matches CLI lifetime)
     Db {
         #[command(subcommand)]
         cmd: DbCmd,
@@ -138,7 +138,7 @@ enum AuthCmd {
     List,
     /// Generate a .env.example file
     EnvInit,
-    /// Set local credentials (plaintext under .dust/credentials.json)
+    /// Set local credentials (plaintext under ~/.dust/credentials.json)
     Set {
         #[arg(long = "env", value_name = "KEY=VALUE")]
         pairs: Vec<String>,
@@ -155,6 +155,9 @@ enum BlockCmd {
         block_type: String,
         #[arg(value_name = "NAME")]
         name: String,
+        /// Validate and show outcome without writing changes
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Remove a block by name
     Rm {
@@ -162,6 +165,9 @@ enum BlockCmd {
         spec_path: String,
         #[arg(value_name = "NAME")]
         name: String,
+        /// Validate and show outcome without writing changes
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Rename a block
     Rename {
@@ -171,6 +177,9 @@ enum BlockCmd {
         old: String,
         #[arg(value_name = "NEW")]
         new: String,
+        /// Validate and show outcome without writing changes
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Move a block before/after another block by name
     Move {
@@ -182,6 +191,9 @@ enum BlockCmd {
         before: Option<String>,
         #[arg(long)]
         after: Option<String>,
+        /// Validate and show outcome without writing changes
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Set config key=value pairs on a block (raw values)
     SetConfig {
@@ -191,22 +203,14 @@ enum BlockCmd {
         name: String,
         #[arg(value_name = "PAIRS")]
         kv: Vec<String>,
+        /// Validate and show outcome without writing changes
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
 #[derive(Subcommand, Debug, Clone)]
 enum DbCmd {
-    /// Start embedded Postgres (writes DSN to CORE_DATABASE_URI)
-    Start {
-        #[arg(long, value_name = "PATH")]
-        data_dir: Option<String>,
-        #[arg(long, value_name = "PORT")]
-        port: Option<u16>,
-    },
-    /// Show embedded Postgres status
-    Status,
-    /// Stop embedded Postgres
-    Stop,
     /// Backup the data dir into a zip archive
     Backup {
         #[arg(long, value_name = "ZIP")]
@@ -221,7 +225,7 @@ enum DbCmd {
 
 #[derive(Subcommand, Debug, Clone)]
 enum DocsCmd {
-    /// Index a file or folder into .dust/local_docs
+    /// Index a file or folder into ~/.dust/local_docs
     Index {
         #[arg(value_name = "PATH")]
         path: String,
@@ -287,12 +291,21 @@ struct RunArgs {
     /// Print structured JSON output
     #[arg(long)]
     json: bool,
+    /// Suppress streaming run events (print nothing unless an error occurs)
+    #[arg(long)]
+    no_events: bool,
     /// Disable all provider/cache usage even if blocks enable it
     #[arg(long)]
     no_cache: bool,
     /// Hard cap on estimated total tokens (prompts + instructions + messages)
     #[arg(long, value_name = "N")]
     max_total_tokens: Option<usize>,
+    /// Set model for a block: NAME=provider/model_id (repeatable)
+    #[arg(long = "model", value_name = "NAME=PROVIDER/MODEL", num_args(0..))]
+    models: Vec<String>,
+    /// Set block config key=value at runtime: NAME:key=value (repeatable)
+    #[arg(long = "set", value_name = "NAME:KEY=VALUE", num_args(0..))]
+    set_kv: Vec<String>,
 }
 
 #[tokio::main]
@@ -336,8 +349,11 @@ async fn main() -> Result<()> {
                 dataset_id: None,
                 dataset_hash: None,
                 json: *json,
+                no_events: false,
                 no_cache: false,
                 max_total_tokens: None,
+                models: vec![],
+                set_kv: vec![],
             })
             .await
         }
@@ -349,6 +365,9 @@ async fn main() -> Result<()> {
         use std::process::exit;
         // Show the full error chain with all context
         eprintln!("error: {:#}", e);
+        if let Some(h) = util::take_hint() {
+            eprintln!("{}", h);
+        }
         let code = match &cli.command {
             Commands::Spec { .. } => 1,
             Commands::Run(_) => 2,
@@ -369,21 +388,47 @@ async fn spec_check(path: &str, json: bool) -> Result<()> {
         )
     })?;
 
+    // Fast path: fail early on unsupported block types with a clear message
+    let unsupported = util::scan_unsupported_block_types(&spec);
+    if !unsupported.is_empty() {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": false,
+                    "error": "unsupported block types for this release",
+                    "unsupported": unsupported
+                })
+            );
+            return Ok(());
+        } else {
+            eprintln!("Unsupported block types in {}:", path);
+            for (t, name, ln) in &unsupported {
+                eprintln!(" - {} {} (line {})", t, name, ln);
+            }
+            bail!("spec contains unsupported blocks");
+        }
+    }
+
     // Parse using Core library. This does not execute the spec or require DB.
     let app = match dust::app::App::new(&spec).await {
         Ok(app) => app,
         Err(e) => {
             if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "ok": false,
-                        "error": format!("{:#}", e)
-                    })
-                );
+                let mut obj = serde_json::json!({
+                    "ok": false,
+                    "error": format!("{:#}", e)
+                });
+                if util::likely_provider_misuse(&spec) {
+                    obj["hint"] = serde_json::json!("LLM/Chat blocks do not accept `provider:` in the spec. Use --model NAME=provider/model_id or --set NAME:provider_id=... --set NAME:model_id=...");
+                }
+                println!("{}", obj);
                 return Ok(()); // JSON mode handles its own output
             } else {
-                // Return the error with context - main handler will display it
+                // Optionally add a friendly hint for common mistakes (printed after the error)
+                if util::likely_provider_misuse(&spec) {
+                    util::set_hint("hint: LLM/Chat blocks do not accept `provider:` in the spec\n      use --model NAME=provider/model_id or --set NAME:provider_id=... --set NAME:model_id=...");
+                }
                 return Err(e).with_context(|| format!("Spec validation failed for '{}'", path));
             }
         }
@@ -459,12 +504,22 @@ async fn run_once(args: RunArgs) -> Result<()> {
     }
 
     let spec = if let Some(spec_path) = &args.spec_path {
-        fs::read_to_string(spec_path).with_context(|| {
+        let s = fs::read_to_string(spec_path).with_context(|| {
             format!(
                 "Failed to read spec file '{}': not found or unreadable",
                 spec_path
             )
-        })?
+        })?;
+        // Fail early on unsupported block types with a clear message
+        let unsupported = util::scan_unsupported_block_types(&s);
+        if !unsupported.is_empty() {
+            eprintln!("Unsupported block types in {}:", spec_path);
+            for (t, name, ln) in &unsupported {
+                eprintln!(" - {} {} (line {})", t, name, ln);
+            }
+            bail!("spec contains unsupported blocks");
+        }
+        s
     } else if let Some(assistant_file) = &args.assistant_file {
         let cfg_raw = fs::read_to_string(assistant_file)
             .with_context(|| format!("Failed to read assistant file '{}'", assistant_file))?;
@@ -488,9 +543,15 @@ async fn run_once(args: RunArgs) -> Result<()> {
         bail!("either SPEC_PATH or --assistant-file is required")
     };
 
-    let mut app = dust::app::App::new(&spec)
-        .await
-        .with_context(|| "Spec parse failed: invalid Dust syntax")?;
+    let mut app = match dust::app::App::new(&spec).await {
+        Ok(a) => a,
+        Err(e) => {
+            if util::likely_provider_misuse(&spec) {
+                util::set_hint("hint: LLM/Chat blocks do not accept `provider:` in the spec\n      use --model NAME=provider/model_id or --set NAME:provider_id=... --set NAME:model_id=...");
+            }
+            return Err(e).with_context(|| "Spec parse failed: invalid Dust syntax");
+        }
+    };
 
     // Disallow unsupported block types in this release (explicit guard)
     if app.blocks().iter().any(|(bt, _)| {
@@ -555,12 +616,53 @@ async fn run_once(args: RunArgs) -> Result<()> {
             }
         }
     }
+    // Apply --model NAME=provider/model_id
+    for m in &args.models {
+        if let Some((name, rest)) = m.split_once('=') {
+            if let Some((provider, model)) = rest.split_once('/') {
+                let entry = blocks_cfg
+                    .entry(name.to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                entry["provider_id"] = serde_json::json!(provider);
+                entry["model_id"] = serde_json::json!(model);
+            }
+        }
+    }
+    // Apply --set NAME:key=value (best-effort typed parsing)
+    for s in &args.set_kv {
+        if let Some((name, kv)) = s.split_once(':') {
+            if let Some((key, val)) = kv.split_once('=') {
+                let parsed = if val.eq_ignore_ascii_case("true") {
+                    Value::Bool(true)
+                } else if val.eq_ignore_ascii_case("false") {
+                    Value::Bool(false)
+                } else if let Ok(n) = val.parse::<i64>() {
+                    Value::Number(n.into())
+                } else if let Ok(f) = val.parse::<f64>() {
+                    serde_json::Number::from_f64(f)
+                        .map(Value::Number)
+                        .unwrap_or(Value::String(val.to_string()))
+                } else if (val.starts_with('{') && val.ends_with('}'))
+                    || (val.starts_with('[') && val.ends_with(']'))
+                {
+                    serde_json::from_str::<Value>(val).unwrap_or(Value::String(val.to_string()))
+                } else {
+                    Value::String(val.to_string())
+                };
+                let entry = blocks_cfg
+                    .entry(name.to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                entry[key] = parsed;
+            }
+        }
+    }
+
     let run_config = dust::run::RunConfig { blocks: blocks_cfg };
 
     // Optional: estimate tokens and enforce max_total_tokens if requested
     if let Some(cap) = args.max_total_tokens {
         let model_hint =
-            std::env::var("DUST_MODEL_HINT").unwrap_or_else(|_| "openai/gpt-4o".to_string());
+            std::env::var("DUST_MODEL_HINT").unwrap_or_else(|_| "openai/gpt-5".to_string());
         let est = estimate_total_tokens(&spec, messages_value.as_ref(), &model_hint)
             .await
             .unwrap_or(0);
@@ -620,159 +722,216 @@ async fn run_once(args: RunArgs) -> Result<()> {
         .context("failed to construct qdrant clients (set QDRANT envs)")?;
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    let sender = if args.no_events { None } else { Some(tx) };
     let run_fut = app.run(
         credentials,
         secrets,
         Box::new(store.clone()),
         databases_store,
         qdrant_clients,
-        Some(tx),
+        sender,
         true,
     );
 
-    let printer = tokio::spawn(async move {
-        while let Some(ev) = rx.recv().await {
-            println!("{}", ev);
-        }
-    });
-    let res = run_fut.await;
-    let _ = printer.await;
+    let deser_err_flag = std::sync::Arc::new(parking_lot::Mutex::new(false));
+    let res = if args.no_events {
+        run_fut.await
+    } else {
+        let flag = deser_err_flag.clone();
+        let printer = tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                // Inspect for deserialization error in messages_code to provide a later hint
+                let mut saw = false;
+                if let Some(t) = ev.get("type").and_then(|t| t.as_str()) {
+                    if t == "block_execution" {
+                        if let Some(exec) = ev.get("content").and_then(|c| c.get("execution")) {
+                            // execution is array of arrays of objects with error/value
+                            if let Some(arr) = exec.as_array() {
+                                for outer in arr {
+                                    if let Some(inner) = outer.as_array() {
+                                        for item in inner {
+                                            if let Some(err) =
+                                                item.get("error").and_then(|e| e.as_str())
+                                            {
+                                                if err.contains("messages_code")
+                                                    || err.contains(
+                                                        "Code block deserialization error",
+                                                    )
+                                                    || err.contains("deserialization error")
+                                                    || err.contains("Invalid messages code output")
+                                                {
+                                                    saw = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if saw {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if saw {
+                    let mut g = flag.lock();
+                    *g = true;
+                }
+                println!("{}", ev);
+            }
+        });
+        let r = run_fut.await;
+        let _ = printer.await;
+        r
+    };
+    if res.is_err() && *deser_err_flag.lock() {
+        util::set_hint(
+            "hint: messages_code must return an array of chat messages (e.g., []) or valid message objects",
+        );
+    }
     res.context("spec run failed")
 }
 
 async fn doctor() -> Result<()> {
     use std::env;
-    println!("dustx doctor");
+    use std::io::Write as _;
 
-    // Check embedded PG DSN env (CORE_DATABASE_URI)
+    println!("== dustx doctor ==");
+
+    // CONFIG
+    println!("== CONFIG ==");
     let db_uri = env::var("CORE_DATABASE_URI").unwrap_or_default();
     if db_uri.is_empty() {
-        eprintln!("[warn] CORE_DATABASE_URI not set; runs will auto-manage embedded PG but you may want to set a DSN pointing to .dust/db");
+        eprintln!("⚠ CORE_DATABASE_URI not set; using embedded DB");
     } else {
-        println!("[ok] CORE_DATABASE_URI set");
+        println!("✔ CORE_DATABASE_URI set");
     }
 
-    // Check provider envs (non-fatal)
-    let providers = [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "SERP_API_KEY",
-        "BROWSERLESS_API_KEY",
-    ];
-    let mut any_provider = false;
-    for k in providers {
-        if env::var(k).is_ok() {
-            any_provider = true;
-            println!("[ok] provider {} configured", k);
-        }
-    }
-    if !any_provider {
-        eprintln!("[warn] no provider credentials found; LLM/web tools may fail. Use 'dust auth set' or export env vars.");
-    }
-
-    // Try parsing a tiny no-op spec to validate parser linkage
+    println!();
+    // CORE/JS
+    println!("== CORE ==");
     let demo =
         "\ninput INPUT {}\ncode CHECK {\n  code:\n```\n_fun = (env) => ({ ok: true })\n```\n}\n";
     let _ = dust::app::App::new(demo)
         .await
         .context("core parse check failed")?;
-    println!("[ok] core parse path working");
+    println!("✔ core parse path working");
+    println!("✔ JS executor initialized");
 
-    println!("[info] {}", pg::status());
-
-    // Ensure embedded PG is running and try a store roundtrip
-    let mut hard_error = false;
+    println!();
+    // DATABASE
+    println!("== DATABASE ==");
+    let mut blocking = false;
     match pg::ensure_running().await {
-        Ok((dsn, _pg)) => {
-            // _pg keeps the PostgreSQL instance alive for this scope
-            match dust::stores::postgres::PostgresStore::new(&dsn).await {
-                Ok(store) => {
-                    if let Err(e) = store.init().await {
-                        eprintln!("[warn] init schema failed: {}", e);
-                        hard_error = true;
-                    }
-                    match load_or_create_project(&store).await {
-                        Ok(_proj) => println!("[ok] embedded Postgres reachable at {}", dsn),
-                        Err(e) => {
-                            eprintln!("[warn] store roundtrip failed: {}", e);
-                            hard_error = true;
-                        }
-                    }
-                    // Try DB version
-                    if let Ok((client, connection)) =
-                        tokio_postgres::connect(&dsn, tokio_postgres::NoTls).await
-                    {
-                        // Spawn the connection pump
-                        tokio::spawn(async move {
-                            let _ = connection.await;
-                        });
-                        if let Ok(row) = client.query_one("SELECT version()", &[]).await {
-                            let v: &str = row.get(0);
-                            println!("[ok] postgres version: {}", v);
-                        }
+        Ok((dsn, _pg)) => match dust::stores::postgres::PostgresStore::new(&dsn).await {
+            Ok(store) => {
+                if let Err(e) = store.init().await {
+                    eprintln!("[warn] init schema failed: {}", e);
+                    blocking = true;
+                }
+                match load_or_create_project(&store).await {
+                    Ok(_) => println!("✔ embedded Postgres reachable at {}", dsn),
+                    Err(e) => {
+                        eprintln!("[warn] store roundtrip failed: {}", e);
+                        blocking = true;
                     }
                 }
-                Err(e) => {
-                    eprintln!("[warn] could not connect Postgres store: {}", e);
-                    hard_error = true;
+                if let Ok((client, connection)) =
+                    tokio_postgres::connect(&dsn, tokio_postgres::NoTls).await
+                {
+                    tokio::spawn(async move {
+                        let _ = connection.await;
+                    });
+                    if let Ok(row) = client.query_one("SELECT version()", &[]).await {
+                        let v: &str = row.get(0);
+                        println!("✔ postgres version: {}", v);
+                    }
                 }
             }
-        }
+            Err(e) => {
+                eprintln!("⚠ could not connect Postgres store: {}", e);
+                blocking = true;
+            }
+        },
         Err(e) => {
-            eprintln!("[warn] could not ensure embedded PG: {}", e);
-            hard_error = true;
+            eprintln!("⚠ could not ensure embedded PG: {}", e);
+            blocking = true;
         }
     }
 
-    // JS executor probe
-    println!("[ok] JS executor initialized");
-
-    // Filesystem permissions: ensure .dust is writable
+    println!();
+    // FILESYSTEM
+    println!("== FILESYSTEM ==");
     match pg::cli_data_dir() {
         Ok(dir) => {
             let test = dir.join(".doctor_write_test");
             match std::fs::write(&test, b"ok") {
                 Ok(_) => {
                     let _ = std::fs::remove_file(&test);
-                    println!("[ok] .dust writable at {}", dir.display());
+                    println!("✔ .dust writable at {}", dir.display());
                 }
                 Err(e) => {
-                    eprintln!("[warn] cannot write to {}: {}", dir.display(), e);
-                    hard_error = true;
+                    eprintln!("⚠ cannot write to {}: {}", dir.display(), e);
+                    blocking = true;
                 }
             }
         }
         Err(e) => {
-            eprintln!("[warn] cannot resolve data dir: {}", e);
-            eprintln!("[hint] check current working directory and permissions");
-            hard_error = true;
+            eprintln!("⚠ cannot resolve data dir: {}", e);
+            eprintln!("ℹ check current working directory and permissions");
+            blocking = true;
         }
     }
 
-    // Provider probes (best-effort)
+    println!();
+    // PROVIDERS
+    println!("== PROVIDERS ==");
+    let mut any_provider = false;
+    for k in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "SERP_API_KEY",
+        "BROWSERLESS_API_KEY",
+    ] {
+        if env::var(k).is_ok() {
+            any_provider = true;
+            println!("✔ {} configured", k);
+        }
+    }
+    if !any_provider {
+        eprintln!("⚠ no provider credentials set; features may be unavailable");
+    }
     if let Ok(k) = std::env::var("OPENAI_API_KEY") {
         if !k.is_empty() {
             if let Err(e) = probe_openai(&k).await {
-                eprintln!("[warn] openai probe failed: {}", e);
+                eprintln!("⚠ openai probe failed: {}", e);
             } else {
-                println!("[ok] openai reachable");
+                println!("✔ openai reachable");
             }
         }
     }
     if let Ok(k) = std::env::var("ANTHROPIC_API_KEY") {
         if !k.is_empty() {
             if let Err(e) = probe_anthropic(&k).await {
-                eprintln!("[warn] anthropic probe failed: {}", e);
+                eprintln!("⚠ anthropic probe failed: {}", e);
             } else {
-                println!("[ok] anthropic reachable");
+                println!("✔ anthropic reachable");
             }
         }
     }
 
-    println!("doctor completed");
-    if hard_error {
+    println!();
+    // SUMMARY
+    if blocking {
+        println!("== RESULT ==");
+        println!("✖ issues (blocking)");
+        let _ = std::io::stdout().flush();
         anyhow::bail!("doctor detected blocking issues")
     } else {
+        println!("== RESULT ==");
+        println!("✔ ok");
+        let _ = std::io::stdout().flush();
         Ok(())
     }
 }
@@ -1055,8 +1214,12 @@ async fn probe_anthropic(key: &str) -> Result<()> {
 }
 
 async fn spec_fmt(path: &str) -> Result<()> {
-    let mut spec =
-        fs::read_to_string(path).with_context(|| format!("Failed to read '{}'", path))?;
+    let mut spec = fs::read_to_string(path).with_context(|| {
+        format!(
+            "Failed to read spec file '{}': not found or unreadable",
+            path
+        )
+    })?;
     // Normalize line endings and collapse multiple blank lines; ensure trailing newline.
     spec = spec.replace("\r\n", "\n");
     let collapsed = regex::Regex::new("\n{3,}")
@@ -1079,7 +1242,12 @@ async fn spec_fmt(path: &str) -> Result<()> {
 }
 
 async fn spec_hash(path: &str) -> Result<()> {
-    let spec = fs::read_to_string(path).with_context(|| format!("Failed to read '{}'", path))?;
+    let spec = fs::read_to_string(path).with_context(|| {
+        format!(
+            "Failed to read spec file '{}': not found or unreadable",
+            path
+        )
+    })?;
     let app = dust::app::App::new(&spec)
         .await
         .with_context(|| "parse failed")?;
@@ -1089,9 +1257,15 @@ async fn spec_hash(path: &str) -> Result<()> {
 
 async fn spec_diff(path: &str, against: Option<&str>) -> Result<()> {
     use similar::{Algorithm, TextDiff};
-    let a = fs::read_to_string(path).with_context(|| format!("Failed to read '{}'", path))?;
+    let a = fs::read_to_string(path).with_context(|| {
+        format!(
+            "Failed to read spec file '{}': not found or unreadable",
+            path
+        )
+    })?;
     let b = if let Some(p) = against {
-        fs::read_to_string(p).with_context(|| format!("Failed to read '{}'", p))?
+        fs::read_to_string(p)
+            .with_context(|| format!("Failed to read spec file '{}': not found or unreadable", p))?
     } else {
         // Compare current vs formatted output
         let mut tmp = a.replace("\r\n", "\n");
@@ -1129,7 +1303,11 @@ async fn spec_tokens(path: &str, model: &str) -> Result<()> {
     // Pick tokenizer based on model
     use dust::providers::tiktoken::tiktoken as tk;
     let bpe = match model {
-        m if m.contains("gpt-4o") || m.contains("gpt-4o-mini") || m.contains("gpt-4.1") => {
+        m if m.contains("gpt-5")
+            || m.contains("gpt-4o")
+            || m.contains("gpt-4o-mini")
+            || m.contains("gpt-4.1") =>
+        {
             tk::o200k_base_singleton()
         }
         m if m.contains("gpt-4") || m.contains("gpt-3.5") => tk::cl100k_base_singleton(),
@@ -1384,11 +1562,10 @@ async fn cache_clear(before: Option<&str>) -> Result<()> {
 
 fn parse_date_to_epoch(s: &str) -> Result<u64> {
     // Accept YYYY-MM-DD; interpret as UTC midnight
-    let d = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")?;
-    let dt = d
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight should always be valid");
-    Ok(dt.and_utc().timestamp() as u64)
+    let date = jiff::civil::Date::strptime("%Y-%m-%d", s)?;
+    let datetime = date.at(0, 0, 0, 0); // midnight
+    let zoned = datetime.to_zoned(jiff::tz::TimeZone::UTC)?;
+    Ok(zoned.timestamp().as_second() as u64)
 }
 
 async fn cache_export(path: &str, before: Option<&str>, typ: Option<&str>) -> Result<()> {
@@ -1487,17 +1664,6 @@ async fn cache_import(path: &str) -> Result<()> {
 
 async fn db_cmd(cmd: DbCmd) -> Result<()> {
     match cmd {
-        // Start/Stop/Status don't make sense when DB lifecycle matches CLI lifecycle
-        // DbCmd::Start { .. } => {
-        //     // Database starts automatically when needed
-        // }
-        // DbCmd::Stop => {
-        //     // Database stops when the CLI exits
-        // }
-        // DbCmd::Status => {
-        //     println!("{}", pg::db_status());
-        // }
-        // Backup and Reset still make sense for data management
         DbCmd::Backup { out } => {
             pg::backup(&out)?;
             println!("[ok] backup written: {}", out);
@@ -1507,11 +1673,6 @@ async fn db_cmd(cmd: DbCmd) -> Result<()> {
             println!(
                 "[ok] reset data dir{}",
                 if keep_backup { " (kept backup)" } else { "" }
-            );
-        }
-        _ => {
-            anyhow::bail!(
-                "This db command is not supported - database lifecycle matches CLI lifecycle"
             );
         }
     }
@@ -1552,28 +1713,45 @@ async fn block_cmd(cmd: BlockCmd) -> Result<()> {
             spec_path,
             block_type,
             name,
-        } => block_add(&spec_path, &block_type, &name).await,
-        BlockCmd::Rm { spec_path, name } => block_rm(&spec_path, &name).await,
+            dry_run,
+        } => block_add(&spec_path, &block_type, &name, dry_run).await,
+        BlockCmd::Rm {
+            spec_path,
+            name,
+            dry_run,
+        } => block_rm(&spec_path, &name, dry_run).await,
         BlockCmd::Rename {
             spec_path,
             old,
             new,
-        } => block_rename(&spec_path, &old, &new).await,
+            dry_run,
+        } => block_rename(&spec_path, &old, &new, dry_run).await,
         BlockCmd::Move {
             spec_path,
             name,
             before,
             after,
-        } => block_move(&spec_path, &name, before.as_deref(), after.as_deref()).await,
+            dry_run,
+        } => {
+            block_move(
+                &spec_path,
+                &name,
+                before.as_deref(),
+                after.as_deref(),
+                dry_run,
+            )
+            .await
+        }
         BlockCmd::SetConfig {
             spec_path,
             name,
             kv,
-        } => block_set_config(&spec_path, &name, &kv).await,
+            dry_run,
+        } => block_set_config(&spec_path, &name, &kv, dry_run).await,
     }
 }
 
-async fn block_add(spec_path: &str, block_type: &str, name: &str) -> Result<()> {
+async fn block_add(spec_path: &str, block_type: &str, name: &str, dry_run: bool) -> Result<()> {
     let mut spec =
         fs::read_to_string(spec_path).with_context(|| format!("Failed to read '{}'", spec_path))?;
     let snippet = match block_type.to_lowercase().as_str() {
@@ -1586,8 +1764,16 @@ async fn block_add(spec_path: &str, block_type: &str, name: &str) -> Result<()> 
     spec.push_str(&snippet);
 
     // Validate with Core before writing
-    block_validation::validate_and_write(spec_path, &spec).await?;
-    println!("Appended {} block '{}' to {}", block_type, name, spec_path);
+    if dry_run {
+        block_validation::validate_spec(&spec).await?;
+        println!(
+            "[dry-run] would append {} block '{}' to {}",
+            block_type, name, spec_path
+        );
+    } else {
+        block_validation::validate_and_write(spec_path, &spec).await?;
+        println!("Appended {} block '{}' to {}", block_type, name, spec_path);
+    }
     Ok(())
 }
 
@@ -1596,7 +1782,7 @@ fn build_chat_spec_from_assistant(cfg: &Value, context: Option<String>) -> Strin
         .get("model")
         .and_then(|m| m.get("model"))
         .and_then(|s| s.as_str())
-        .unwrap_or("gpt-4o");
+        .unwrap_or("gpt-5");
     let instructions = cfg
         .get("instructions")
         .and_then(|s| s.as_str())
@@ -1685,7 +1871,9 @@ fn last_user_text(messages: &Value) -> Option<String> {
 async fn estimate_total_tokens(spec: &str, messages: Option<&Value>, model: &str) -> Result<usize> {
     use dust::providers::tiktoken::tiktoken as tk;
     let bpe = match model {
-        m if m.contains("gpt-4o") || m.contains("gpt-4.1") => tk::o200k_base_singleton(),
+        m if m.contains("gpt-5") || m.contains("gpt-4o") || m.contains("gpt-4.1") => {
+            tk::o200k_base_singleton()
+        }
         m if m.contains("gpt-4") || m.contains("gpt-3.5") => tk::cl100k_base_singleton(),
         _ => tk::cl100k_base_singleton(),
     };
@@ -1759,19 +1947,28 @@ async fn estimate_message_tokens_inner(
     tot
 }
 
-async fn block_rm(spec_path: &str, name: &str) -> Result<()> {
+async fn block_rm(spec_path: &str, name: &str, dry_run: bool) -> Result<()> {
     let spec =
         fs::read_to_string(spec_path).with_context(|| format!("Failed to read '{}'", spec_path))?;
     let (new_spec, removed) = crate::block::remove_block_by_name(&spec, name)
         .ok_or_else(|| anyhow::anyhow!("block '{}' not found", name))?;
 
     // Validate with Core before writing
-    block_validation::validate_and_write(spec_path, &new_spec).await?;
-    println!("Removed block '{}' ({} bytes)", name, removed.len());
+    if dry_run {
+        block_validation::validate_spec(&new_spec).await?;
+        println!(
+            "[dry-run] would remove block '{}' ({} bytes)",
+            name,
+            removed.len()
+        );
+    } else {
+        block_validation::validate_and_write(spec_path, &new_spec).await?;
+        println!("Removed block '{}' ({} bytes)", name, removed.len());
+    }
     Ok(())
 }
 
-async fn block_rename(spec_path: &str, old: &str, new: &str) -> Result<()> {
+async fn block_rename(spec_path: &str, old: &str, new: &str, dry_run: bool) -> Result<()> {
     let spec =
         fs::read_to_string(spec_path).with_context(|| format!("Failed to read '{}'", spec_path))?;
     let (idx, _) = crate::block::find_block_bounds(&spec, old)
@@ -1790,8 +1987,13 @@ async fn block_rename(spec_path: &str, old: &str, new: &str) -> Result<()> {
     out.push_str(&spec[idx.header_end..]);
 
     // Validate with Core before writing
-    block_validation::validate_and_write(spec_path, &out).await?;
-    println!("Renamed block '{}' -> '{}'", old, new);
+    if dry_run {
+        block_validation::validate_spec(&out).await?;
+        println!("[dry-run] would rename block '{}' -> '{}'", old, new);
+    } else {
+        block_validation::validate_and_write(spec_path, &out).await?;
+        println!("Renamed block '{}' -> '{}'", old, new);
+    }
     Ok(())
 }
 
@@ -1800,6 +2002,7 @@ async fn block_move(
     name: &str,
     before: Option<&str>,
     after: Option<&str>,
+    dry_run: bool,
 ) -> Result<()> {
     if before.is_some() && after.is_some() {
         anyhow::bail!("specify only one of --before or --after");
@@ -1832,12 +2035,17 @@ async fn block_move(
     out.push_str(&base[insert_at..]);
 
     // Validate with Core before writing
-    block_validation::validate_and_write(spec_path, &out).await?;
-    println!("Moved block '{}'", name);
+    if dry_run {
+        block_validation::validate_spec(&out).await?;
+        println!("[dry-run] would move block '{}'", name);
+    } else {
+        block_validation::validate_and_write(spec_path, &out).await?;
+        println!("Moved block '{}'", name);
+    }
     Ok(())
 }
 
-async fn block_set_config(spec_path: &str, name: &str, kv: &[String]) -> Result<()> {
+async fn block_set_config(spec_path: &str, name: &str, kv: &[String], dry_run: bool) -> Result<()> {
     let spec =
         fs::read_to_string(spec_path).with_context(|| format!("Failed to read '{}'", spec_path))?;
     let (bounds, _) = crate::block::find_block_bounds(&spec, name)
@@ -1858,8 +2066,13 @@ async fn block_set_config(spec_path: &str, name: &str, kv: &[String]) -> Result<
     out.push_str(&spec[bounds.end..]);
 
     // Validate with Core before writing
-    block_validation::validate_and_write(spec_path, &out).await?;
-    println!("Updated config for '{}'", name);
+    if dry_run {
+        block_validation::validate_spec(&out).await?;
+        println!("[dry-run] would update config for '{}'", name);
+    } else {
+        block_validation::validate_and_write(spec_path, &out).await?;
+        println!("Updated config for '{}'", name);
+    }
     Ok(())
 }
 

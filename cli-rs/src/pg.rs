@@ -22,20 +22,21 @@ static DB_INSTANCE: OnceLock<postgresql_embedded::PostgreSQL> = OnceLock::new();
 //     Ok(uri)
 // }
 
-/// Doctor helper: report basic status for CORE_DATABASE_URI.
-pub fn status() -> String {
-    match env::var("CORE_DATABASE_URI") {
-        Ok(v) if !v.is_empty() => format!("CORE_DATABASE_URI set → {}", v),
-        _ => "CORE_DATABASE_URI not set (will attempt to use default 127.0.0.1:54330)".to_string(),
-    }
-}
-
 /// Ensure embedded Postgres is running and set CORE_DATABASE_URI to a reachable DSN.
 pub async fn ensure_running() -> Result<(String, Option<postgresql_embedded::PostgreSQL>)> {
     let timeout_ms: u64 = env::var("DUSTX_PG_READY_TIMEOUT_MS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(20_000);
+
+    // For now, dustx intentionally ignores any externally-set CORE_DATABASE_URI.
+    // Emit a one-time informational warning if it's set to reduce confusion.
+    static WARNED_IGNORE_EXT_DSN: OnceLock<()> = OnceLock::new();
+    if let Ok(v) = env::var("CORE_DATABASE_URI") {
+        if !v.is_empty() && WARNED_IGNORE_EXT_DSN.set(()).is_ok() {
+            eprintln!("ℹ CORE_DATABASE_URI is set but ignored; using embedded DB for now");
+        }
+    }
 
     // Check if DB_INSTANCE is already set (DB already running from this process)
     if DB_INSTANCE.get().is_some() {
@@ -132,8 +133,11 @@ fn dust_data_dir() -> Result<PathBuf> {
     if let Ok(dir) = env::var("DUSTX_DATA_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    let cwd = env::current_dir().context("cannot read current dir")?;
-    Ok(cwd.join(".dust"))
+    // Use ~/.dust as the default data directory
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE")) // Windows fallback
+        .context("Cannot find home directory (HOME or USERPROFILE)")?;
+    Ok(PathBuf::from(home).join(".dust"))
 }
 
 pub fn cli_data_dir() -> Result<PathBuf> {
@@ -349,7 +353,7 @@ pub fn backup(out: &str) -> Result<()> {
 pub fn reset(keep_backup: bool) -> Result<()> {
     let dir = default_data_dir()?;
     if keep_backup {
-        let ts = chrono::Utc::now().format("%Y%m%d%H%M%S");
+        let ts = jiff::Timestamp::now().strftime("%Y%m%d%H%M%S");
         let bak = dir.with_extension(format!("bak-{}", ts));
         std::fs::rename(&dir, &bak).ok();
     } else {

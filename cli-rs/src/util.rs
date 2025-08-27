@@ -1,4 +1,6 @@
+use parking_lot::Mutex;
 use serde_json::Value;
+use std::sync::OnceLock;
 
 pub fn set_env_default(k: &str, v: &str) {
     if std::env::var(k).is_err() {
@@ -55,4 +57,57 @@ pub fn approximate_block_lines(spec: &str) -> std::collections::HashMap<String, 
         }
     }
     map
+}
+
+pub fn scan_unsupported_block_types(spec: &str) -> Vec<(String, String, usize)> {
+    // Simple line-based scan outside code fences for block headers of unsupported types
+    let nc = strip_code_fences(spec);
+    let mut out: Vec<(String, String, usize)> = Vec::new();
+    let re = regex::Regex::new(
+        r"(?m)^\s*(data_source|database_schema|database)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+    )
+    .unwrap();
+    for (i, line) in nc.lines().enumerate() {
+        let t = line.trim_start();
+        if let Some(cap) = re.captures(t) {
+            let bt = cap
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            let name = cap
+                .get(2)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            out.push((bt, name, i + 1));
+        }
+    }
+    out
+}
+
+pub fn likely_provider_misuse(spec: &str) -> bool {
+    // Heuristic: outside code fences, presence of `provider:` alongside llm/chat blocks
+    let nc = strip_code_fences(spec);
+    let has_provider = nc.contains("\n  provider:")
+        || nc.contains("\n provider:")
+        || nc.trim_start().starts_with("provider:");
+    if !has_provider {
+        return false;
+    }
+    let re = regex::Regex::new(r"(?m)^\s*(llm|chat)\s+\w+\s*\{").unwrap();
+    re.is_match(&nc)
+}
+
+// A tiny global hint sink so we can print hints after the main error in CLI.
+static HINT_SINK: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+pub fn set_hint<S: Into<String>>(hint: S) {
+    let cell = HINT_SINK.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock();
+    *guard = Some(hint.into());
+}
+
+pub fn take_hint() -> Option<String> {
+    let cell = HINT_SINK.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock();
+    guard.take()
 }

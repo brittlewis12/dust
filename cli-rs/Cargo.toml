@@ -4,31 +4,25 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0"
-clap = { version = "4.5", features = ["derive"] }
-tokio = { version = "1.37", features = ["rt-multi-thread","macros"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+anyhow = "1.0.99"
+clap = { version = "4.5.46", features = ["derive"] }
+tokio = { version = "1.47", features = ["rt-multi-thread","macros"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.143"
 humantime = "2.1"
-thiserror = "1.0"
-indicatif = "0.17"
-regex = "1.10"
-notify = { version = "6.1", default-features = false, features = ["macos_kqueue", "serde"] }
+thiserror = "2.0"
+regex = "1.11"
 dotenvy = "0.15"
 walkdir = "2.5"
-globset = "0.4"
-similar = { version = "2.6", default-features = false, features = ["text","inline"] }
+similar = { version = "2.7", default-features = false, features = ["text","inline"] }
 tokio-postgres = { version = "0.7", features = ["runtime"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls","json"] }
-parking_lot = "0.12"
-miette = { version = "7", features = ["fancy"] }
+parking_lot = "0.12.4"
 
-# Optional (to implement embedded PG auto-start in a follow-up)
-postgresql_embedded = "0.18"
+postgresql_embedded = "0.19"
 portpicker = "0.1"
-# walkdir already included above; keep feature linkage only
-zip = "2.1"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+zip = "4.5"
+jiff = "0.2.15"
 
 # Depend on the local Core library crate
 dust = { path = "../core" }

@@ -1,4 +1,5 @@
 use assert_cmd::prelude::*;
+use predicates::prelude::*;
 use std::io::Write;
 use std::process::Command;
 use tempfile::NamedTempFile;
@@ -152,4 +153,35 @@ fn block_rename_duplicate_name_fails() {
         ])
         .assert()
         .failure();
+}
+
+#[test]
+fn block_add_dry_run_does_not_modify_file() {
+    // Create a temp spec
+    let mut f = tempfile::Builder::new()
+        .prefix("spec")
+        .suffix(".dust")
+        .tempfile()
+        .unwrap();
+    write!(f, "input INPUT {{\n\n}}\n").unwrap();
+    let path = f.path().to_path_buf();
+    let before = std::fs::read_to_string(&path).unwrap();
+
+    // Dry-run rename the INPUT block to something else (no write)
+    Command::cargo_bin("dustx")
+        .unwrap()
+        .args([
+            "block",
+            "rename",
+            path.to_str().unwrap(),
+            "INPUT",
+            "RENAMED",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[dry-run] would rename"));
+
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(before, after, "spec file should be unchanged in dry-run");
 }
