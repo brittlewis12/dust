@@ -1,0 +1,25 @@
+
+
+input INPUT {}
+
+chat HELLO_GPT5 {
+  temperature: 0.7
+  messages_code:
+```
+_fun = (env) => {
+  const message = env.input.message || "Hello GPT-5! Please respond with a friendly greeting.";
+  return [{ role: "user", content: message }];
+}
+```
+}
+
+code EXTRACT_MESSAGE {
+  code:
+```
+_fun = (env) => {
+  const response = env.state.HELLO_GPT5;
+  console.log("Full response:", JSON.stringify(response, null, 2));
+  return response.message.content;
+}
+```
+}
